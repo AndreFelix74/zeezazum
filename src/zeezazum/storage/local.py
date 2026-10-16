@@ -16,7 +16,12 @@ class LocalStorage(Storage):
         return full
 
     def write_bytes(self, relative_path: str, data: bytes) -> None:
-        self._resolve(relative_path).write_bytes(data)
+        # escrita atômica: grava em .part e renomeia, para nunca deixar arquivo truncado
+        # (queda no meio do download) com cara de arquivo completo.
+        target = self._resolve(relative_path)
+        tmp = target.with_name(target.name + ".part")
+        tmp.write_bytes(data)
+        tmp.replace(target)
 
     def read_bytes(self, relative_path: str) -> bytes:
         return (self.base_path / relative_path).read_bytes()

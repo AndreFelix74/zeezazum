@@ -23,6 +23,7 @@ class BaseScraper(ABC):
         max_posts: int | None,
         since_date: datetime | None,
         stop_at_post_id: str | None,
+        on_checkpoint=None,
     ) -> list[Post]:
         """Navega até o perfil e retorna os posts encontrados, do mais novo ao mais antigo.
 

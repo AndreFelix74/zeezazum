@@ -168,6 +168,21 @@ Exemplo de cron diário no EC2:
 0 6 * * * cd /caminho/do/projeto && uv run zeezazum scrape --config config.yaml >> logs/cron.log 2>&1
 ```
 
+**O scroll precisa do mouse sobre o conteúdo.** O scraper move o mouse para o
+centro da página antes de cada rolagem (em 0,0 o `wheel` cai na barra lateral
+do Instagram e a grade não rola). Se você usar um viewport muito pequeno ou
+modificar o scraper, mantenha o ponteiro sobre a grade de posts.
+
+Se um download de mídia for interrompido (queda, erro de rede), recupere o que
+falta sem raspar de novo e sem abrir navegador:
+
+```bash
+uv run zeezazum media-sync --config config.yaml
+```
+
+Ele varre o `posts.json` de cada conta e baixa só os arquivos ausentes em disco
+(URLs do CDN expiram: se alguma já venceu, o post precisa ser raspado de novo).
+
 ### 5. Aprofundar histórico de contas já raspadas (opcional)
 
 `zeezazum scrape` é incremental "pra frente no tempo": ele para assim que
@@ -195,7 +210,11 @@ output/
 ├── _state.duckdb              # estado por perfil (resume + raspagem incremental)
 └── instagram/<handle>/
     ├── posts.json
-    ├── posts.parquet
+    ├── posts.parquet          # inclui colunas de métricas (like_count, comment_count,
+    │                          # play_count, media_type, hashtags, mentions, is_pinned,
+    │                          # collected_at...)
+    ├── profile.json           # seguidores/seguindo/total de posts + posts raspados
+    ├── raw/<timestamp>.jsonl.gz   # JSON bruto de cada post novo (um chunk por gravação)
     └── media/<shortcode>_<n>.<ext>
 ```
 

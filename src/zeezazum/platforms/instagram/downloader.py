@@ -65,6 +65,8 @@ class MediaDownloader:
             return
 
         relative_base = f"{task.candidate_folder}/media/{task.shortcode}_{task.item.index}"
+        if any(self._storage.exists(f"{relative_base}.{ext}") for ext in ("jpg", "png", "mp4")):
+            return  # já baixado (retomada / media-sync)
         async with self._semaphore:
             try:
                 content, content_type = await self._fetch(client, task.item.url)

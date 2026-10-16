@@ -36,6 +36,10 @@ class Post:
     caption: str | None
     media: tuple[MediaItem, ...]
     raw: dict = field(default_factory=dict)
+    # campos planos extraídos do nó bruto (curtidas, comentários, tipo, local...);
+    # ver parser.extract_metrics. Opcionais para manter compatibilidade.
+    metrics: dict = field(default_factory=dict)
+    is_pinned: bool = False
 
 
 @dataclass

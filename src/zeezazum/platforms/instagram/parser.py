@@ -26,6 +26,7 @@ mesmo sem aparecer de fato no feed.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Any, Iterator
 
@@ -157,17 +158,79 @@ def _extract_media(node: dict) -> list[MediaItem]:
     return [single] if single else []
 
 
+_HASHTAG_RE = re.compile(r"#(\w+)", re.UNICODE)
+_MENTION_RE = re.compile(r"(?<![\w.])@([A-Za-z0-9_.]+)")
+_PRODUCT_TYPE_LABEL = {1: "photo", 2: "video", 8: "carousel"}
+
+
+def _first_int(node: dict, *keys: str) -> int | None:
+    for key in keys:
+        value = node.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return int(value)
+    return None
+
+
+def _is_pinned(node: dict) -> bool:
+    if node.get("is_pinned") is True:
+        return True
+    pinned = node.get("timeline_pinned_user_ids")
+    if isinstance(pinned, list) and pinned:
+        return True
+    return bool(node.get("pinned_info") or node.get("profile_grid_thumbnail_fitting_style") == "pinned")
+
+
+def extract_metrics(node: dict, caption: str | None) -> dict:
+    """Campos planos úteis para análise a partir do nó bruto. Tudo opcional: o
+    Instagram muda o schema com frequência, então ausência vira None (nunca erro).
+    Curtidas ocultas pelo autor aparecem como like_and_view_counts_disabled=True."""
+    location = node.get("location") if isinstance(node.get("location"), dict) else {}
+    usertags = (node.get("usertags") or {}).get("in") or []
+    coauthors = node.get("coauthor_producers") or []
+    clips = node.get("clips_metadata") if isinstance(node.get("clips_metadata"), dict) else {}
+    music_info = (clips.get("music_info") or {}).get("music_asset_info") or {}
+    original_sound = (clips.get("original_sound_info") or {})
+    media_type = node.get("media_type")
+    text = caption or ""
+    return {
+        "like_count": _first_int(node, "like_count"),
+        "comment_count": _first_int(node, "comment_count"),
+        "play_count": _first_int(node, "play_count", "ig_play_count"),
+        "view_count": _first_int(node, "view_count", "video_view_count"),
+        "media_type": media_type,
+        "media_type_label": _PRODUCT_TYPE_LABEL.get(media_type),
+        "product_type": node.get("product_type"),
+        "video_duration": node.get("video_duration"),
+        "n_carousel": node.get("carousel_media_count"),
+        "location_name": location.get("name"),
+        "location_id": location.get("pk") or location.get("id"),
+        "usertags": [t.get("user", {}).get("username") for t in usertags if isinstance(t, dict)],
+        "coauthors": [c.get("username") for c in coauthors if isinstance(c, dict)],
+        "accessibility_caption": node.get("accessibility_caption"),
+        "audio_title": music_info.get("title") or original_sound.get("original_audio_title"),
+        "audio_artist": music_info.get("display_artist") or (original_sound.get("ig_artist") or {}).get("username"),
+        "comments_disabled": node.get("comments_disabled"),
+        "likes_hidden": node.get("like_and_view_counts_disabled"),
+        "hashtags": _HASHTAG_RE.findall(text),
+        "mentions": _MENTION_RE.findall(text),
+        "owner_username": (node.get("user") or node.get("owner") or {}).get("username"),
+    }
+
+
 def parse_post_node(node: dict) -> Post | None:
     shortcode = node.get("shortcode") or node.get("code")
     if not shortcode:
         return None
+    caption = _extract_caption(node)
     return Post(
         shortcode=shortcode,
         post_url=f"https://www.instagram.com/p/{shortcode}/",
         timestamp=_extract_timestamp(node),
-        caption=_extract_caption(node),
+        caption=caption,
         media=tuple(_extract_media(node)),
         raw=node,
+        metrics=extract_metrics(node, caption),
+        is_pinned=_is_pinned(node),
     )
 
 

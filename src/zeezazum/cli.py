@@ -12,7 +12,7 @@ from zeezazum.config import load_config
 from zeezazum.input.loader import read_table, write_table
 from zeezazum.input.url_parser import extract_instagram_accounts
 from zeezazum.models import SocialAccount
-from zeezazum.pipeline.orchestrator import run_scrape
+from zeezazum.pipeline.orchestrator import run_media_sync, run_scrape
 
 app = typer.Typer(help="Zeezazum — raspador universalizável de redes sociais (Playwright)")
 
@@ -73,6 +73,7 @@ def _load_config_and_accounts(config: Path):
         filename=cfg.logging.file,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # uma linha por arquivo baixado polui o log
 
     df = read_table(cfg.input.path)
     missing = [c for c in (cfg.input.url_column, cfg.input.id_column) if c not in df.columns]
@@ -123,6 +124,19 @@ def backfill(
 
     typer.echo(f"Aprofundando histórico de {len(accounts)} perfis do Instagram (+{extra_posts} posts cada)...")
     asyncio.run(run_scrape(cfg, accounts, extra_posts=extra_posts))
+    typer.echo("Concluído.")
+
+
+@app.command("media-sync")
+def media_sync(
+    config: Path = typer.Option(Path("config.yaml"), "--config", help="Caminho do config.yaml"),
+) -> None:
+    """Baixa a mídia que falta em disco para posts já raspados (recupera downloads
+    interrompidos). Não abre navegador e não raspa nada novo."""
+    cfg, accounts = _load_config_and_accounts(config)
+    result = asyncio.run(run_media_sync(cfg, accounts))
+    for handle, n in result.items():
+        typer.echo(f"@{handle}: {n} arquivos reenfileirados")
     typer.echo("Concluído.")
 
 

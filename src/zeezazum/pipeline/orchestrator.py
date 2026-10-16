@@ -5,7 +5,9 @@ de mídia em paralelo (fila assíncrona) enquanto o próximo perfil é raspado.
 from __future__ import annotations
 
 import asyncio
+import gzip
 import io
+import json
 import logging
 import random
 import tempfile
@@ -60,7 +62,8 @@ def _parse_since_date(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
 
 
-def _posts_to_dicts(posts: list[Post]) -> list[dict]:
+def _posts_to_dicts(posts: list[Post], collected_at: str | None = None) -> list[dict]:
+    collected_at = collected_at or datetime.now(timezone.utc).isoformat()
     return [
         {
             "shortcode": p.shortcode,
@@ -68,9 +71,27 @@ def _posts_to_dicts(posts: list[Post]) -> list[dict]:
             "timestamp": p.timestamp.isoformat() if p.timestamp else None,
             "caption": p.caption,
             "media": [{"kind": m.kind.value, "url": m.url, "index": m.index} for m in p.media],
+            "is_pinned": p.is_pinned,
+            # engajamento é uma fotografia do momento da coleta — por isso o carimbo por post
+            "collected_at": collected_at,
+            **p.metrics,
         }
         for p in posts
     ]
+
+
+def _persist_raw(storage: Storage, candidate_folder: str, fresh_shortcodes: set[str], posts: list[Post]) -> None:
+    """Guarda o JSON bruto de cada post novo num chunk gzip (`raw/<ts>.jsonl.gz`),
+    sem inchar posts.json. Cada chamada grava um chunk novo (sem reescrever os antigos)."""
+    lines = [
+        json.dumps({"shortcode": p.shortcode, "raw": p.raw}, ensure_ascii=False, default=str)
+        for p in posts
+        if p.shortcode in fresh_shortcodes
+    ]
+    if not lines:
+        return
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    storage.write_bytes(f"{candidate_folder}/raw/{stamp}.jsonl.gz", gzip.compress("\n".join(lines).encode("utf-8")))
 
 
 def _persist_posts(storage: Storage, candidate_folder: str, new_posts: list[Post]) -> tuple[list[dict], int]:
@@ -95,10 +116,27 @@ def _persist_posts(storage: Storage, candidate_folder: str, new_posts: list[Post
     storage.write_json(json_path, merged)
 
     buffer = io.BytesIO()
-    pl.DataFrame(merged).write_parquet(buffer)
+    pl.DataFrame(merged, infer_schema_length=None).write_parquet(buffer)
     storage.write_bytes(f"{candidate_folder}/posts.parquet", buffer.getvalue())
 
+    _persist_raw(storage, candidate_folder, {d["shortcode"] for d in fresh}, new_posts)
     return fresh, len(merged)
+
+
+def _count_persisted(storage: Storage, candidate_folder: str) -> int:
+    path = f"{candidate_folder}/posts.json"
+    return len(storage.read_json(path)) if storage.exists(path) else 0
+
+
+def _write_profile_stats(
+    storage: Storage, candidate_folder: str, account: SocialAccount, stats: dict | None, scraped_total: int
+) -> None:
+    """profile.json: seguidores/total de posts no momento da coleta + quantos posts foram
+    raspados (base para medir cobertura da raspagem)."""
+    storage.write_json(
+        f"{candidate_folder}/profile.json",
+        {"handle": account.handle, "row_id": account.row_id, "scraped_posts": scraped_total, **(stats or {})},
+    )
 
 
 def _carry_forward_state(account: SocialAccount, existing: CandidateState | None, status: str) -> CandidateState:
@@ -143,6 +181,22 @@ async def _scrape_one(
         stop_at_post_id = None
         effective_max_posts = (existing.total_posts_seen + extra_posts) if existing else max_posts
 
+    media_enqueued = 0
+
+    async def flush(batch: list[Post]) -> list[dict]:
+        """Persiste o lote (merge idempotente por shortcode) e enfileira a mídia só dos
+        posts realmente novos — usado nos checkpoints e no final do perfil."""
+        nonlocal media_enqueued
+        fresh_dicts, _ = _persist_posts(storage, candidate_folder, batch)
+        fresh_codes = {d["shortcode"] for d in fresh_dicts}
+        for post in batch:
+            if post.shortcode not in fresh_codes:
+                continue
+            for media_item in post.media:
+                await queue.put(MediaTask(candidate_folder=candidate_folder, shortcode=post.shortcode, item=media_item))
+                media_enqueued += 1
+        return fresh_dicts
+
     posts: list[Post] | None = None
     for attempt in range(1, max_attempts + 1):
         try:
@@ -152,6 +206,7 @@ async def _scrape_one(
                 max_posts=effective_max_posts,
                 since_date=since_date,
                 stop_at_post_id=stop_at_post_id,
+                on_checkpoint=flush,
             )
             break
         except ProfileUnavailable as exc:
@@ -170,18 +225,11 @@ async def _scrape_one(
         state.upsert(_carry_forward_state(account, existing, status="done"))
         return
 
-    fresh_dicts, total_after_merge = _persist_posts(storage, candidate_folder, posts)
-    fresh_shortcodes = {d["shortcode"] for d in fresh_dicts}
+    fresh_dicts = await flush(posts)  # posts já persistidos em checkpoints não contam como novos
+    total_after_merge = _count_persisted(storage, candidate_folder)
+    _write_profile_stats(storage, candidate_folder, account, scraper.last_profile_stats, total_after_merge)
 
-    media_enqueued = 0
-    for post in posts:
-        if post.shortcode not in fresh_shortcodes:
-            continue  # já persistido antes (comum em modo backfill) — não rebaixa mídia
-        for media_item in post.media:
-            await queue.put(MediaTask(candidate_folder=candidate_folder, shortcode=post.shortcode, item=media_item))
-            media_enqueued += 1
-
-    if not fresh_dicts:
+    if not fresh_dicts and media_enqueued == 0:
         logger.info("Nenhum post novo para @%s", account.handle)
         state.upsert(_carry_forward_state(account, existing, status="done"))
         return
@@ -197,8 +245,8 @@ async def _scrape_one(
         last_run_at=datetime.now(timezone.utc),
         media_pending=(existing.media_pending if existing else 0) + media_enqueued,
     ))
-    logger.info("@%s: %d posts novos, %d itens de mídia enfileirados (total: %d posts)",
-                account.handle, len(fresh_dicts), media_enqueued, total_after_merge)
+    logger.info("@%s: %d itens de mídia enfileirados (total: %d posts persistidos)",
+                account.handle, media_enqueued, total_after_merge)
 
 
 async def run_scrape(
@@ -230,7 +278,8 @@ async def run_scrape(
                     session_file,
                 )
             context = await browser.new_context(
-                storage_state=str(session_file) if session_file.exists() else None
+                storage_state=str(session_file) if session_file.exists() else None,
+                viewport={"width": 1280, "height": 900},
             )
             scraper = InstagramScraper(scroll_delay_range=(1.5, 3.5))
 
@@ -259,3 +308,41 @@ async def run_scrape(
         await consumer_task
         state.close()
         _sync_state_to_remote(storage, state_tmp_path)
+
+
+async def run_media_sync(config: ZeezazumConfig, accounts: list[SocialAccount]) -> dict[str, int]:
+    """Reenfileira a mídia de posts já persistidos (`posts.json`) cujo arquivo não existe em
+    disco — recupera downloads perdidos por queda/erro. Usa as URLs gravadas; se o CDN já
+    expirou alguma, ela falha no log e o post precisa ser re-raspado."""
+    storage = build_storage(config.storage)
+    queue: "asyncio.Queue[MediaTask | None]" = asyncio.Queue()
+    downloader = MediaDownloader(
+        storage,
+        max_concurrent=config.media.max_concurrent_downloads,
+        download_images=config.media.download_images,
+        download_videos=config.media.download_videos,
+    )
+    consumer_task = asyncio.create_task(downloader.run(queue))
+    queued: dict[str, int] = {}
+    try:
+        for account in accounts:
+            folder = f"instagram/{account.handle}"
+            path = f"{folder}/posts.json"
+            if not storage.exists(path):
+                continue
+            from zeezazum.models import MediaItem, MediaKind
+
+            n = 0
+            for post in storage.read_json(path):
+                for m in post.get("media", []):
+                    base = f"{folder}/media/{post['shortcode']}_{m['index']}"
+                    if any(storage.exists(f"{base}.{ext}") for ext in ("jpg", "png", "mp4")):
+                        continue
+                    item = MediaItem(kind=MediaKind(m["kind"]), url=m["url"], index=m["index"])
+                    await queue.put(MediaTask(candidate_folder=folder, shortcode=post["shortcode"], item=item))
+                    n += 1
+            queued[account.handle] = n
+    finally:
+        await queue.put(None)
+        await consumer_task
+    return queued

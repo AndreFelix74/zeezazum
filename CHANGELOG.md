@@ -5,6 +5,44 @@ Todas as mudanças notáveis deste projeto são documentadas aqui.
 O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/),
 e o versionamento segue [SemVer](https://semver.org/lang/pt-BR/).
 
+## [0.2.1] — 2026-10-16
+
+### Adicionado
+- Métricas por post em `posts.json`/`posts.parquet`: `like_count`, `comment_count`,
+  `play_count`, `view_count`, `media_type`, `product_type`, `video_duration`,
+  localização, `usertags`, coautores, áudio, `hashtags`, `mentions`, entre outras
+  (campos ausentes viram nulos). Cada post também recebe `collected_at` (o
+  engajamento é uma fotografia do momento da coleta) e `is_pinned`.
+- `Post` ganha os campos opcionais `metrics` e `is_pinned`; novo
+  `extract_metrics()` no parser do Instagram.
+- `profile.json` por perfil, com seguidores, seguindo e total de posts (lidos de
+  `og:description`) e quantos posts foram raspados — base para medir cobertura.
+- JSON bruto de cada post novo guardado em chunks `raw/<timestamp>.jsonl.gz`,
+  sem inchar o `posts.json`.
+- Checkpoints durante o scroll (a cada 200 posts, parâmetro `on_checkpoint`):
+  persistem posts e enfileiram mídia sem esperar o fim do perfil.
+- Comando `zeezazum media-sync`: baixa a mídia que falta em disco para posts já
+  raspados, sem abrir navegador (recupera downloads interrompidos).
+
+### Corrigido
+- Scroll não rolava a grade: o mouse ficava em (0,0), onde o `wheel` cai na
+  barra lateral fixa do Instagram (causa do "só 3 posts por perfil"). Agora o
+  mouse é movido para o centro da página antes de cada scroll.
+- Respostas da API do Instagram eram descartadas por um filtro de `content-type`
+  que exigia "json"; o filtro foi removido.
+- Posts fixados no topo da grade não contam mais para o corte `since_date`: são
+  necessários 12 posts não fixados mais antigos para encerrar o scroll.
+
+### Alterado
+- `_MAX_STAGNANT_SCROLLS` sobe de 4 para 8 e há pausas longas periódicas no
+  scroll, para perfis longos e menor risco de bloqueio.
+- Persistência idempotente por `shortcode` (checkpoint e fim do perfil não
+  duplicam posts nem mídia); `pl.DataFrame` usa `infer_schema_length=None`.
+- Viewport do navegador fixado em 1280x900.
+- Downloader pula mídia que já existe; `LocalStorage.write_bytes` é atômico
+  (escreve em `.part` e renomeia).
+- Logger `httpx` em WARNING.
+
 ## [0.2.0] — 2026-09-24
 
 ### Corrigido
