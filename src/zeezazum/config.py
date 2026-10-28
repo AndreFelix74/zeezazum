@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import yaml
 from pydantic import BaseModel, Field, field_validator
@@ -80,16 +80,18 @@ class PipelinePathsConfig(BaseModel):
 
 
 class CollectRetryConfig(BaseModel):
-    max_attempts: int = 2
-    backoff_seconds: int = 30
+    max_attempts: int = Field(default=2, ge=1)
+    backoff_seconds: int = Field(default=30, ge=0)
 
 
 class CollectConfig(BaseModel):
     headless: bool = False
     since_date: str | None = None
     max_posts: int | None = None
-    delay_between_profiles_seconds: tuple[float, float] = (15, 40)
-    profile_timeout_seconds: int = 900
+    delay_between_profiles_seconds: tuple[
+        Annotated[float, Field(ge=0)], Annotated[float, Field(ge=0)]
+    ] = (15, 40)
+    profile_timeout_seconds: int = Field(default=900, ge=1)
     retry: CollectRetryConfig = Field(default_factory=CollectRetryConfig)
 
     @field_validator("since_date")
@@ -119,18 +121,18 @@ class CollectConfig(BaseModel):
 class DownloadConfig(BaseModel):
     download_images: bool = True
     download_videos: bool = True
-    max_concurrent: int = 4
-    request_timeout_seconds: int = 120
-    max_attempts: int = 3
-    poll_interval_seconds: int = 10
+    max_concurrent: int = Field(default=4, ge=1)
+    request_timeout_seconds: int = Field(default=120, ge=1)
+    max_attempts: int = Field(default=3, ge=1)
+    poll_interval_seconds: int = Field(default=10, ge=1)
 
 
 class TransferConfig(BaseModel):
     bucket: str
     prefix: str
     region: str = "sa-east-1"
-    poll_interval_seconds: int = 30
-    ledger_backup_interval_seconds: int = 600
+    poll_interval_seconds: int = Field(default=30, ge=1)
+    ledger_backup_interval_seconds: int = Field(default=600, ge=1)
     delete_local_media_after_upload: bool = True
 
     @field_validator("prefix")
@@ -145,7 +147,7 @@ class TransferConfig(BaseModel):
 
 
 class ReconcileConfig(BaseModel):
-    pending_min_age_hours: int = 6
+    pending_min_age_hours: int = Field(default=6, ge=0)
 
 
 class PipelineLoggingConfig(BaseModel):

@@ -65,6 +65,14 @@ def test_invalid_handle(tmp_path: Path, handle: str) -> None:
         paths.uploaded_file(handle)
 
 
+def test_empty_handle_and_run_id_raise(tmp_path: Path) -> None:
+    paths = DataPaths(tmp_path)
+    with pytest.raises(ValueError):
+        paths.account_dir("")
+    with pytest.raises(ValueError):
+        paths.collected_file("")
+
+
 @pytest.mark.parametrize("run_id", ["a/b", "a\\b", "..", ".oculto", "lote/../outro", "a..b"])
 def test_invalid_run_id(tmp_path: Path, run_id: str) -> None:
     paths = DataPaths(tmp_path)

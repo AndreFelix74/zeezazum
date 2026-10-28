@@ -11,13 +11,14 @@ from pathlib import Path
 def _check_component(value: str, label: str) -> str:
     if (
         not isinstance(value, str)
+        or not value
         or value.startswith(".")
         or "/" in value
         or "\\" in value
         or ".." in value
     ):
         raise ValueError(
-            f"{label} inválido: não pode conter '/', '\\' ou '..', nem começar com '.'"
+            f"{label} inválido: não pode ser vazio, conter '/', '\\' ou '..', nem começar com '.'"
         )
     return value
 

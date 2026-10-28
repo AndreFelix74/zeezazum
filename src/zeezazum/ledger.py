@@ -22,10 +22,20 @@ def utc_stamp() -> str:
 
 
 def append(path: Path, record: dict[str, Any]) -> None:
-    """Acrescenta um registro e garante que a linha chegou ao disco."""
+    """Acrescenta um registro e garante que a linha chegou ao disco.
+
+    Se o arquivo existe, não está vazio e o último byte não é ``\\n``, grava um
+    ``\\n`` antes da linha nova, na mesma abertura. Isso isola uma linha
+    interrompida por queda, para que o registro seguinte não seja perdido.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
-    with path.open("ab") as handle:
+    with path.open("ab+") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        if size > 0:
+            handle.seek(size - 1)
+            if handle.read(1) != b"\n":
+                handle.write(b"\n")
         handle.write(line.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
@@ -35,7 +45,7 @@ def read_all(path: Path) -> list[dict[str, Any]]:
     """Lê todos os registros completos. Arquivo inexistente devolve lista vazia."""
     if not path.is_file():
         return []
-    records, _consumed = _parse(path.read_bytes(), path, start_line=1)
+    records, _consumed = _parse(path.read_bytes(), path, offset=0)
     return records
 
 
@@ -52,7 +62,7 @@ def read_from(path: Path, offset: int) -> tuple[list[dict[str, Any]], int]:
     with path.open("rb") as handle:
         handle.seek(offset)
         data = handle.read()
-    records, consumed = _parse(data, path, start_line=_line_number_at(path, offset))
+    records, consumed = _parse(data, path, offset=offset)
     return records, offset + consumed
 
 
@@ -71,12 +81,13 @@ def _line_number_at(path: Path, offset: int) -> int:
     return count + 1
 
 
-def _parse(data: bytes, path: Path, start_line: int) -> tuple[list[dict[str, Any]], int]:
+def _parse(data: bytes, path: Path, offset: int) -> tuple[list[dict[str, Any]], int]:
     """Interpreta o prefixo de linhas completas de ``data``.
 
     Devolve os objetos JSON e quantos bytes esse prefixo ocupa.
     A última linha do arquivo, se não terminar em ``\\n`` ou não for JSON válido,
     é ignorada sem aviso. Linhas inválidas no meio geram ``WARNING``.
+    O número da linha só é calculado quando há uma dessas linhas a reportar.
     """
     if not data:
         return [], 0
@@ -91,16 +102,20 @@ def _parse(data: bytes, path: Path, start_line: int) -> tuple[list[dict[str, Any
 
     lines = complete.split(b"\n")[:-1]
     last_index = len(lines) - 1
+    invalid_middle: list[int] = []
     records: list[dict[str, Any]] = []
     for index, raw in enumerate(lines):
-        line_no = start_line + index
         is_last_line_of_file = file_ends_with_newline and index == last_index
         parsed = _load_record(raw)
         if parsed is None:
             if not is_last_line_of_file:
-                logger.warning("linha inválida ignorada em %s:%d", path, line_no)
+                invalid_middle.append(index)
             continue
         records.append(parsed)
+    if invalid_middle:
+        start_line = _line_number_at(path, offset)
+        for index in invalid_middle:
+            logger.warning("linha inválida ignorada em %s:%d", path, start_line + index)
     return records, len(complete)
 
 

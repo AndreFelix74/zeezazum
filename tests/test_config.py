@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from zeezazum.config import load_config, load_pipeline_config
@@ -74,6 +76,43 @@ transfer:
     )
     with pytest.raises(ValidationError):
         load_pipeline_config(path)
+
+
+@pytest.mark.parametrize(
+    ("where", "value"),
+    [
+        (("collect", "delay_between_profiles_seconds"), [-1, 40]),
+        (("collect", "delay_between_profiles_seconds"), [15, -1]),
+        (("collect", "profile_timeout_seconds"), 0),
+        (("collect", "retry", "max_attempts"), 0),
+        (("collect", "retry", "backoff_seconds"), -1),
+        (("download", "max_attempts"), 0),
+        (("download", "max_concurrent"), 0),
+        (("download", "request_timeout_seconds"), 0),
+        (("download", "poll_interval_seconds"), 0),
+        (("transfer", "poll_interval_seconds"), 0),
+        (("transfer", "ledger_backup_interval_seconds"), 0),
+        (("reconcile", "pending_min_age_hours"), -1),
+    ],
+)
+def test_numeric_lower_bounds_are_rejected(
+    tmp_path: Path, where: tuple[str, ...], value: object
+) -> None:
+    raw: dict[str, Any] = {
+        "platform": "instagram",
+        "paths": {"data_dir": "/data/zeezazum"},
+        "transfer": {"bucket": "meu-bucket", "prefix": "campanha/"},
+    }
+    cursor: dict[str, Any] = raw
+    for key in where[:-1]:
+        nested = cursor.setdefault(key, {})
+        assert isinstance(nested, dict)
+        cursor = nested
+    cursor[where[-1]] = value
+    path = _write(tmp_path, yaml.dump(raw, allow_unicode=True))
+    with pytest.raises(ValidationError) as caught:
+        load_pipeline_config(path)
+    assert any(error["type"] == "greater_than_equal" for error in caught.value.errors())
 
 
 @pytest.mark.parametrize(

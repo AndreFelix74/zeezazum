@@ -69,6 +69,18 @@ def test_read_from_returns_only_new_lines(tmp_path: Path) -> None:
     assert offset_again == offset
 
 
+def test_append_isolates_interrupted_line(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "todo.jsonl"
+    path.write_bytes(b'{"a": 1}\n{"b": 2')
+    append(path, {"c": 3})
+    with caplog.at_level(logging.WARNING, logger="zeezazum.ledger"):
+        records = read_all(path)
+    assert records == [{"a": 1}, {"c": 3}]
+    assert f"{path}:2" in caplog.text
+
+
 def test_utc_helpers() -> None:
     iso = utc_now_iso()
     stamp = utc_stamp()
