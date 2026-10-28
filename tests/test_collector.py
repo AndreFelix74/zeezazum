@@ -318,7 +318,7 @@ def test_collector_does_not_import_playwright() -> None:
 def test_help_lists_prepare_login_and_collect() -> None:
     result = CliRunner().invoke(app, ["--help"])
     assert result.exit_code == 0
-    for name in ("prepare", "login", "collect", "download"):
+    for name in ("prepare", "login", "collect", "download", "transfer"):
         assert name in result.stdout
     assert "collect-one" not in result.stdout
 
