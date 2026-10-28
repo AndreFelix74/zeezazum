@@ -8,6 +8,7 @@ import logging
 import os
 import resource
 import signal
+import sys
 from pathlib import Path
 
 import polars as pl
@@ -20,8 +21,10 @@ from zeezazum.ledger import utc_stamp
 from zeezazum.logsetup import configure
 from zeezazum.models import SocialAccount
 from zeezazum.paths import DataPaths
-from zeezazum.pipeline.collect_one import CollectOneResult, collect_one
+from zeezazum.pipeline.collect_one import CollectOneResult, collect_one, self_rss_mb
+from zeezazum.pipeline.collector import run_collect
 from zeezazum.pipeline.persistence import atomic_write_bytes
+from zeezazum.platforms.instagram.login import run_login
 
 app = typer.Typer(help="Zeezazum — raspador universalizável de redes sociais (Playwright)")
 logger = logging.getLogger(__name__)
@@ -112,6 +115,7 @@ def collect_one_command(
             media_items=0,
             foreign_posts_discarded=0,
             error=str(exc),
+            max_rss_mb=self_rss_mb(),
         )
         atomic_write_bytes(
             result_file,
@@ -127,17 +131,58 @@ async def _run_collect_one(cfg, paths: DataPaths, handle: str, run_id: str, scra
     loop = asyncio.get_running_loop()
     task = asyncio.current_task()
 
-    def _on_sigterm() -> None:
+    def _on_stop() -> None:
         task.cancel()
 
-    loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, _on_stop)
     try:
         return await collect_one(cfg, paths, handle, run_id, scraper_factory=scraper_factory)
     except asyncio.CancelledError:
-        logger.info("coleta de @%s interrompida por SIGTERM", handle)
+        logger.info("coleta de @%s interrompida por sinal", handle)
         raise SystemExit(1) from None
     finally:
-        loop.remove_signal_handler(signal.SIGTERM)
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.remove_signal_handler(sig)
+
+
+@app.command()
+def login(
+    config: Path = typer.Option(..., "--config", help="Caminho do config.yaml"),
+) -> None:
+    """Abre o navegador para login no perfil persistente."""
+    cfg = load_pipeline_config(config)
+    paths = DataPaths(cfg.paths.data_dir)
+    configure(paths, "collector", cfg.logging.level)
+    raise typer.Exit(code=run_login(paths))
+
+
+@app.command()
+def collect(
+    config: Path = typer.Option(..., "--config", help="Caminho do config.yaml"),
+    input: Path = typer.Option(..., "--input", help="Parquet com a coluna handle"),
+    run_id: str | None = typer.Option(
+        None,
+        "--run-id",
+        help="Identificador da execução; padrão: nome do arquivo de entrada",
+    ),
+) -> None:
+    """Coleta os perfis de um parquet, um processo por perfil."""
+    cfg = load_pipeline_config(config)
+    paths = DataPaths(cfg.paths.data_dir)
+    configure(paths, "collector", cfg.logging.level)
+    chosen = run_id or input.stem
+    try:
+        code = run_collect(cfg, paths, input, chosen, config_path=config)
+    except ValueError as exc:
+        message = str(exc)
+    except (OSError, pl.exceptions.PolarsError) as exc:
+        message = f"não foi possível ler {input}: {exc}"
+    else:
+        raise typer.Exit(code=code)
+    logger.error("%s", message)
+    print(message, file=sys.stderr)
+    raise typer.Exit(code=1)
 
 
 def _log_max_rss() -> None:

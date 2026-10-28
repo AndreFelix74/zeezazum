@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import resource
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from zeezazum.models import Post
 from zeezazum.paths import DataPaths
 from zeezazum.pipeline.persistence import persist_posts, persist_raw, write_profile_stats
 from zeezazum.platforms.base import ProfileUnavailable, SessionBlocked
+from zeezazum.platforms.instagram.browser import launch_profile
 from zeezazum.platforms.instagram.media_items import todo_records
 from zeezazum.platforms.instagram.scraper import InstagramScraper, ScrapeResult
 
@@ -33,6 +35,7 @@ class CollectOneResult:
     media_items: int
     foreign_posts_discarded: int
     error: str | None
+    max_rss_mb: float | None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -83,7 +86,7 @@ async def collect_one(
             persist_raw(paths, handle, {item["shortcode"] for item in fresh}, scraped.posts)
         except Exception as exc:
             logger.exception("Falha ao gravar output de @%s", handle)
-            return CollectOneResult(
+            return _result(
                 status="error",
                 collection_id=collection_id,
                 posts_in_period=len(scraped.posts),
@@ -97,7 +100,7 @@ async def collect_one(
             _append_todo(paths, handle, run_id, collection_id, collected_at, scraped.posts)
         except Exception as exc:
             logger.exception("Falha ao gravar TODO de @%s", handle)
-            return CollectOneResult(
+            return _result(
                 status="error",
                 collection_id=collection_id,
                 posts_in_period=len(scraped.posts),
@@ -105,7 +108,7 @@ async def collect_one(
                 foreign_posts_discarded=scraped.foreign_discarded,
                 error=str(exc),
             )
-        return CollectOneResult(
+        return _result(
             status="collected",
             collection_id=collection_id,
             posts_in_period=len(scraped.posts),
@@ -116,12 +119,7 @@ async def collect_one(
 
     if scraper_factory is None:
         async with async_playwright() as playwright:
-            context = await playwright.chromium.launch_persistent_context(
-                user_data_dir=str(paths.browser),
-                headless=cfg.collect.headless,
-                viewport={"width": 1280, "height": 900},
-                locale="en-US",
-            )
+            context = await launch_profile(playwright, paths, headless=cfg.collect.headless)
             try:
                 return await execute(context)
             finally:
@@ -182,8 +180,33 @@ def _count_media(posts: list[Post]) -> int:
     return sum(len(post.media) for post in posts)
 
 
-def _empty(collection_id: str, status: Status, error: str) -> CollectOneResult:
+def self_rss_mb() -> float:
+    """Pico de RSS deste processo, em MB. No Linux, ru_maxrss vem em kilobytes."""
+    return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+
+
+def _result(
+    *,
+    status: Status,
+    collection_id: str,
+    posts_in_period: int,
+    media_items: int,
+    foreign_posts_discarded: int,
+    error: str | None,
+) -> CollectOneResult:
     return CollectOneResult(
+        status=status,
+        collection_id=collection_id,
+        posts_in_period=posts_in_period,
+        media_items=media_items,
+        foreign_posts_discarded=foreign_posts_discarded,
+        error=error,
+        max_rss_mb=self_rss_mb(),
+    )
+
+
+def _empty(collection_id: str, status: Status, error: str) -> CollectOneResult:
+    return _result(
         status=status,
         collection_id=collection_id,
         posts_in_period=0,

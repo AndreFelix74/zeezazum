@@ -10,10 +10,13 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_sigterm_exits_without_result_or_todo(tmp_path: Path) -> None:
+@pytest.mark.parametrize("stop_signal", [signal.SIGTERM, signal.SIGINT])
+def test_sigterm_exits_without_result_or_todo(tmp_path: Path, stop_signal: signal.Signals) -> None:
     data_dir = tmp_path / "data"
     config = tmp_path / "config.yaml"
     config.write_text(
@@ -48,7 +51,7 @@ def test_sigterm_exits_without_result_or_todo(tmp_path: Path) -> None:
     )
     try:
         time.sleep(1)
-        proc.send_signal(signal.SIGTERM)
+        proc.send_signal(stop_signal)
         code = proc.wait(timeout=4)
     finally:
         if proc.poll() is None:

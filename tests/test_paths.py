@@ -26,6 +26,10 @@ def test_derived_paths(tmp_path: Path) -> None:
     assert paths.uploaded_file("fulano") == tmp_path / "ledger" / "uploaded" / "fulano.jsonl"
     assert paths.collected_file("lote_01") == tmp_path / "ledger" / "collected" / "lote_01.jsonl"
     assert paths.lock_file("collector") == tmp_path / "locks" / "collector.lock"
+    assert (
+        paths.child_result_file("lote_01", "fulano")
+        == tmp_path / "locks" / "results" / "lote_01__fulano.json"
+    )
     assert paths.log_file("collector") == tmp_path / "logs" / "collector.log"
     assert paths.todo_file("fulano.silva").name == "fulano.silva.jsonl"
 

@@ -97,6 +97,12 @@ class DataPaths:
     def lock_file(self, name: str) -> Path:
         return self.locks / f"{name}.lock"
 
+    def child_result_file(self, run_id: str, handle: str) -> Path:
+        """JSON de resultado do processo filho de um perfil."""
+        safe_run = _check_component(run_id, "run_id")
+        safe_handle = _check_component(handle, "handle")
+        return self.locks / "results" / f"{safe_run}__{safe_handle}.json"
+
     def log_file(self, name: str) -> Path:
         return self.logs / f"{name}.log"
 
