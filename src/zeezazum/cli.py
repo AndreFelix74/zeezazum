@@ -23,6 +23,7 @@ from zeezazum.models import SocialAccount
 from zeezazum.paths import DataPaths
 from zeezazum.pipeline.collect_one import CollectOneResult, collect_one, self_rss_mb
 from zeezazum.pipeline.collector import run_collect
+from zeezazum.pipeline.downloader import run_download
 from zeezazum.pipeline.persistence import atomic_write_bytes
 from zeezazum.platforms.instagram.login import run_login
 
@@ -183,6 +184,17 @@ def collect(
     logger.error("%s", message)
     print(message, file=sys.stderr)
     raise typer.Exit(code=1)
+
+
+@app.command()
+def download(
+    config: Path = typer.Option(..., "--config", help="Caminho do config.yaml"),
+) -> None:
+    """Baixa os itens de TODO e registra o resultado em DONE."""
+    cfg = load_pipeline_config(config)
+    paths = DataPaths(cfg.paths.data_dir)
+    configure(paths, "download", cfg.logging.level)
+    raise typer.Exit(code=run_download(cfg, paths))
 
 
 def _log_max_rss() -> None:
