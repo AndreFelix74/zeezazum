@@ -1,0 +1,36 @@
+platform: instagram
+
+paths:
+  data_dir: /data/zeezazum
+
+collect:
+  headless: false                  # no servidor, rodar sob xvfb-run
+  since_date: "2026-08-15"
+  max_posts: null
+  delay_between_profiles_seconds: [15, 40]
+  profile_timeout_seconds: 900
+  retry:
+    max_attempts: 2
+    backoff_seconds: 30
+
+download:
+  download_images: true
+  download_videos: true
+  max_concurrent: 4
+  request_timeout_seconds: 120
+  max_attempts: 3
+  poll_interval_seconds: 10
+
+transfer:
+  bucket: meu-bucket
+  prefix: campanha2026-v2/
+  region: sa-east-1
+  poll_interval_seconds: 30
+  ledger_backup_interval_seconds: 600
+  delete_local_media_after_upload: true
+
+reconcile:
+  pending_min_age_hours: 6         # TODO sem DONE há menos tempo que isto não conta como falta
+
+logging:
+  level: INFO
