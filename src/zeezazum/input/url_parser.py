@@ -21,8 +21,26 @@ _LABEL_RE = re.compile(
     r"^(?:link\s+)?(?:instagram|insta|ig)\s*:?\s*@?([A-Za-z0-9_.]+)$",
     re.IGNORECASE,
 )
-# segmentos de path que não são handles de perfil (URLs de post/reel/etc.)
-_NON_PROFILE_SEGMENTS = {"", "p", "reel", "reels", "stories", "explore", "tv", "accounts"}
+# Caminhos do Instagram que não correspondem a perfis: posts, reels e páginas
+# fixas (channel, direct, share, about, legal, entre outras).
+_NON_PROFILE_SEGMENTS = {
+    "",
+    "p",
+    "reel",
+    "reels",
+    "stories",
+    "explore",
+    "tv",
+    "accounts",
+    "channel",
+    "direct",
+    "s",
+    "share",
+    "about",
+    "legal",
+    "web",
+    "developer",
+}
 
 
 def _clean_handle(raw: str) -> str | None:

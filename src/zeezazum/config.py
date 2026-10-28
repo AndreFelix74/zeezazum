@@ -87,7 +87,7 @@ class CollectRetryConfig(BaseModel):
 class CollectConfig(BaseModel):
     headless: bool = False
     since_date: str | None = None
-    max_posts: int | None = None
+    max_posts: int | None = Field(default=None, ge=1)
     delay_between_profiles_seconds: tuple[
         Annotated[float, Field(ge=0)], Annotated[float, Field(ge=0)]
     ] = (15, 40)

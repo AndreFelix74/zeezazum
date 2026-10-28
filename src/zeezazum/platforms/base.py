@@ -10,7 +10,11 @@ from zeezazum.models import Post
 
 
 class ProfileUnavailable(Exception):
-    """Sessão expirada, perfil privado/inexistente, ou bloqueio detectado."""
+    """Perfil inexistente, removido ou privado."""
+
+
+class SessionBlocked(Exception):
+    """Login exigido, verificação de segurança ou conta suspensa; a coleta inteira deve parar."""
 
 
 class BaseScraper(ABC):

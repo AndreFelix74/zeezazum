@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from zeezazum.paths import DataPaths
+from zeezazum.paths import DataPaths, media_stem
 
 
 def test_derived_paths(tmp_path: Path) -> None:
@@ -63,6 +63,12 @@ def test_invalid_handle(tmp_path: Path, handle: str) -> None:
         paths.done_file(handle)
     with pytest.raises(ValueError):
         paths.uploaded_file(handle)
+
+
+def test_media_stem() -> None:
+    assert media_stem("fulano", "DfApM5ooxyv", 0) == "instagram/fulano/media/DfApM5ooxyv_0"
+    with pytest.raises(ValueError):
+        media_stem("a/b", "DfApM5ooxyv", 0)
 
 
 def test_empty_handle_and_run_id_raise(tmp_path: Path) -> None:

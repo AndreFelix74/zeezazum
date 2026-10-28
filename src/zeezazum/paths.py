@@ -23,6 +23,13 @@ def _check_component(value: str, label: str) -> str:
     return value
 
 
+def media_stem(handle: str, shortcode: str, index: int) -> str:
+    """Caminho relativo de um item de mídia, sem extensão."""
+    safe_handle = _check_component(handle, "handle")
+    safe_shortcode = _check_component(shortcode, "shortcode")
+    return f"instagram/{safe_handle}/media/{safe_shortcode}_{index}"
+
+
 @dataclass(frozen=True, slots=True)
 class DataPaths:
     """Caminhos derivados de um diretório de dados."""

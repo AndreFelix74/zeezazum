@@ -81,6 +81,7 @@ transfer:
 @pytest.mark.parametrize(
     ("where", "value"),
     [
+        (("collect", "max_posts"), 0),
         (("collect", "delay_between_profiles_seconds"), [-1, 40]),
         (("collect", "delay_between_profiles_seconds"), [15, -1]),
         (("collect", "profile_timeout_seconds"), 0),
