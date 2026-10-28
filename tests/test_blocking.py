@@ -12,6 +12,10 @@ def test_each_marker_is_detected(marker: str) -> None:
     assert is_blocking_url(f"https://www.instagram.com{marker}?next=%2F") is True
 
 
+def test_auth_platform_flow_is_blocking() -> None:
+    assert is_blocking_url("https://www.instagram.com/auth_platform/no_challenge/?apc=x") is True
+
+
 def test_profile_and_post_urls_are_not_blocking() -> None:
     assert is_blocking_url("https://www.instagram.com/fulano/") is False
     assert is_blocking_url("https://www.instagram.com/p/DfApM5ooxyv/") is False

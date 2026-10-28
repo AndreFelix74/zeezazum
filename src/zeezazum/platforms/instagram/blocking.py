@@ -8,11 +8,12 @@ BLOCKING_URL_MARKERS = (
     "/challenge/",
     "/accounts/suspended",
     "/accounts/disabled",
+    "/auth_platform/",
 )
 
 
 def is_blocking_url(url: str) -> bool:
-    """Diz se a URL é login, verificação ou suspensão no host do Instagram.
+    """Diz se a URL é login, verificação, suspensão ou autenticação de dispositivo.
 
     Exige esquema e host ``instagram.com`` ou um subdomínio. O path precisa
     começar com um marcador. URL sem esquema ou malformada devolve ``False``.
