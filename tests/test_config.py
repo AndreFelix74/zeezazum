@@ -1,4 +1,4 @@
-"""Configuração do pipeline, sem alterar o config legado."""
+"""Configuração do pipeline."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +8,7 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from zeezazum.config import load_config, load_pipeline_config
+from zeezazum.config import load_pipeline_config
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -20,7 +20,7 @@ def _write(tmp_path: Path, text: str) -> Path:
 
 
 def test_example_is_valid() -> None:
-    cfg = load_pipeline_config(ROOT / "config.pipeline.example.yaml")
+    cfg = load_pipeline_config(ROOT / "config.example.yaml")
     assert cfg.platform == "instagram"
     assert cfg.paths.data_dir == "/data/zeezazum"
     assert cfg.collect.since_date == "2026-08-15"
@@ -33,12 +33,6 @@ def test_example_is_valid() -> None:
     assert cfg.transfer.region == "sa-east-1"
     assert cfg.reconcile.pending_min_age_hours == 6
     assert cfg.logging.level == "INFO"
-
-
-def test_legacy_config_still_loads() -> None:
-    cfg = load_config(ROOT / "config.example.yaml")
-    assert cfg.platform == "instagram"
-    assert cfg.input.url_column == "instagram_url"
 
 
 @pytest.mark.parametrize("since_date", ["15/08/2026", "2026-8-15", "2026-02-31", "20260815"])

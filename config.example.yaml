@@ -1,36 +1,36 @@
 platform: instagram
 
-input:
-  path: data/candidatos_instagram.parquet
-  # após `zeezazum prepare`, o output tem sempre as colunas row_id/handle/instagram_url
-  url_column: instagram_url
-  id_column: row_id
+paths:
+  data_dir: /data/zeezazum
 
-scraping:
-  browser: chromium      # chromium | firefox
-  max_posts: 60
-  since_date: null       # ex: "2024-01-01" — também usado como corte no scroll
-  headless: true
-  session_file: sessions/instagram_storage_state.json
-  delay_between_profiles_seconds: [4, 10]
+collect:
+  headless: false                  # no servidor, rodar sob xvfb-run
+  since_date: "2026-08-15"
+  max_posts: null
+  delay_between_profiles_seconds: [15, 40]
+  profile_timeout_seconds: 900
   retry:
-    max_attempts: 3
+    max_attempts: 2
     backoff_seconds: 30
 
-storage:
-  backend: local          # local | s3
-  local:
-    base_path: output
-  s3:
-    bucket: null
-    prefix: zeezazum/
-    region: us-east-1
-
-media:
+download:
   download_images: true
   download_videos: true
-  max_concurrent_downloads: 4
+  max_concurrent: 4
+  request_timeout_seconds: 120
+  max_attempts: 3
+  poll_interval_seconds: 10
+
+transfer:
+  bucket: meu-bucket
+  prefix: campanha2026-v2/
+  region: sa-east-1
+  poll_interval_seconds: 30
+  ledger_backup_interval_seconds: 600
+  delete_local_media_after_upload: true
+
+reconcile:
+  pending_min_age_hours: 6         # TODO sem DONE há menos tempo que isto não conta como falta
 
 logging:
   level: INFO
-  file: logs/zeezazum.log

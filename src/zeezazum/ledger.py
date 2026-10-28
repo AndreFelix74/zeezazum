@@ -22,21 +22,28 @@ def utc_stamp() -> str:
 
 
 def append(path: Path, record: dict[str, Any]) -> None:
-    """Acrescenta um registro e garante que a linha chegou ao disco.
+    """Acrescenta um registro e garante que a linha chegou ao disco."""
+    append_many(path, [record])
+
+
+def append_many(path: Path, records: list[dict[str, Any]]) -> None:
+    """Acrescenta vários registros com um único fsync.
 
     Se o arquivo existe, não está vazio e o último byte não é ``\\n``, grava um
-    ``\\n`` antes da linha nova, na mesma abertura. Isso isola uma linha
-    interrompida por queda, para que o registro seguinte não seja perdido.
+    ``\\n`` antes das linhas novas, na mesma abertura. Isso isola uma linha
+    interrompida por queda, para que os registros seguintes não sejam perdidos.
     """
+    if not records:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
-    line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+    payload = "".join(json.dumps(record, ensure_ascii=False, default=str) + "\n" for record in records)
     with path.open("ab+") as handle:
         size = handle.seek(0, os.SEEK_END)
         if size > 0:
             handle.seek(size - 1)
             if handle.read(1) != b"\n":
                 handle.write(b"\n")
-        handle.write(line.encode("utf-8"))
+        handle.write(payload.encode("utf-8"))
         handle.flush()
         os.fsync(handle.fileno())
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from zeezazum.ledger import append, read_all, read_from, utc_now_iso, utc_stamp
+from zeezazum.ledger import append, append_many, read_all, read_from, utc_now_iso, utc_stamp
 
 
 def test_append_then_read_all_preserves_order(tmp_path: Path) -> None:
@@ -78,6 +78,25 @@ def test_append_isolates_interrupted_line(
     with caplog.at_level(logging.WARNING, logger="zeezazum.ledger"):
         records = read_all(path)
     assert records == [{"a": 1}, {"c": 3}]
+    assert f"{path}:2" in caplog.text
+
+
+def test_append_many_writes_every_line_with_one_fsync(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[int] = []
+    monkeypatch.setattr("zeezazum.ledger.os.fsync", lambda fd: calls.append(fd))
+    path = tmp_path / "todo.jsonl"
+    append_many(path, [{"n": 1}, {"n": 2}, {"n": 3}])
+    assert read_all(path) == [{"n": 1}, {"n": 2}, {"n": 3}]
+    assert len(calls) == 1
+
+
+def test_append_many_isolates_interrupted_line(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    path = tmp_path / "todo.jsonl"
+    path.write_bytes(b'{"a": 1}\n{"b": 2')
+    append_many(path, [{"c": 3}, {"d": 4}])
+    with caplog.at_level(logging.WARNING, logger="zeezazum.ledger"):
+        records = read_all(path)
+    assert records == [{"a": 1}, {"c": 3}, {"d": 4}]
     assert f"{path}:2" in caplog.text
 
 

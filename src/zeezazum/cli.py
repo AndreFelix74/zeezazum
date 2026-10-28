@@ -2,19 +2,31 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
+import json
 import logging
+import os
+import resource
+import signal
 from pathlib import Path
 
 import polars as pl
 import typer
 
-from zeezazum.config import load_config
+from zeezazum.config import load_pipeline_config
 from zeezazum.input.loader import read_table, write_table
 from zeezazum.input.url_parser import extract_instagram_accounts
+from zeezazum.ledger import utc_stamp
+from zeezazum.logsetup import configure
 from zeezazum.models import SocialAccount
-from zeezazum.pipeline.orchestrator import run_media_sync, run_scrape
+from zeezazum.paths import DataPaths
+from zeezazum.pipeline.collect_one import CollectOneResult, collect_one
+from zeezazum.pipeline.persistence import atomic_write_bytes
 
 app = typer.Typer(help="Zeezazum — raspador universalizável de redes sociais (Playwright)")
+logger = logging.getLogger(__name__)
+
+_EXIT_CODES = {"collected": 0, "unavailable": 0, "blocked": 3, "error": 1}
 
 
 def _accounts_from_table(df: pl.DataFrame, *, id_column: str, url_column: str) -> list[SocialAccount]:
@@ -39,9 +51,9 @@ def prepare(
     output: Path = typer.Option(..., "--output", help="Onde salvar a tabela normalizada"),
 ) -> None:
     """Extrai, de uma coluna de texto livre, só as contas de uma plataforma (ex.: Instagram),
-    deduplicadas por linha — gera uma tabela pequena e limpa para alimentar `scrape`.
+    deduplicadas por linha — gera uma tabela pequena e limpa para alimentar a coleta.
     Opcionalmente carrega junto outras colunas de identificação da tabela de origem
-    (nome, UF, partido etc.), úteis pra conferir/filtrar antes de raspar."""
+    (nome, UF, partido etc.), úteis pra conferir/filtrar antes de coletar."""
     if platform != "instagram":
         raise typer.BadParameter("Por enquanto só 'instagram' é suportado.")
 
@@ -65,79 +77,73 @@ def prepare(
     typer.echo(f"{result.height} contas de instagram extraídas de {df.height} linhas -> {output}")
 
 
-def _load_config_and_accounts(config: Path):
-    cfg = load_config(config)
-    Path(cfg.logging.file).parent.mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(
-        level=cfg.logging.level,
-        filename=cfg.logging.file,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    logging.getLogger("httpx").setLevel(logging.WARNING)  # uma linha por arquivo baixado polui o log
-
-    df = read_table(cfg.input.path)
-    missing = [c for c in (cfg.input.url_column, cfg.input.id_column) if c not in df.columns]
-    if missing:
-        raise typer.BadParameter(f"Coluna(s) não encontrada(s) em {cfg.input.path}: {missing}")
-
-    accounts = _accounts_from_table(df, id_column=cfg.input.id_column, url_column=cfg.input.url_column)
-    return cfg, accounts
-
-
-@app.command()
-def scrape(
-    config: Path = typer.Option(Path("config.yaml"), "--config", help="Caminho do config.yaml"),
+@app.command("collect-one", hidden=True)
+def collect_one_command(
+    config: Path = typer.Option(..., "--config", help="Caminho do config.yaml"),
+    handle: str = typer.Option(..., "--handle", help="Perfil a coletar"),
+    run_id: str = typer.Option(..., "--run-id", help="Identificador da execução"),
+    result_file: Path = typer.Option(..., "--result-file", help="Onde gravar o JSON do resultado"),
 ) -> None:
-    """Roda a raspagem (posts + mídia) a partir do config.yaml. Seguro para rodar
-    repetidamente (ex.: via cron): candidatos novos são raspados do zero, candidatos
-    já conhecidos são atualizados incrementalmente (só posts novos — para assim que
-    reencontra o post mais recente já conhecido)."""
-    cfg, accounts = _load_config_and_accounts(config)
-    if not accounts:
-        typer.echo("Nenhuma conta de Instagram encontrada no input. Nada a fazer.")
-        raise typer.Exit(code=0)
+    """Coleta um único perfil. Comando interno, oculto da ajuda."""
+    cfg = load_pipeline_config(config)
+    paths = DataPaths(cfg.paths.data_dir)
+    configure(paths, "collector", cfg.logging.level)
+    scraper_factory = None
+    spec = os.environ.get("ZEEZAZUM_TEST_SCRAPER")
+    if spec:
+        module_name, factory_name = spec.rsplit(":", 1)
+        scraper_factory = getattr(importlib.import_module(module_name), factory_name)
+    exit_code = 1
+    try:
+        result = asyncio.run(_run_collect_one(cfg, paths, handle, run_id, scraper_factory))
+        atomic_write_bytes(
+            result_file,
+            json.dumps(result.to_dict(), ensure_ascii=False).encode("utf-8"),
+        )
+        exit_code = _EXIT_CODES[result.status]
+    except SystemExit as exc:
+        exit_code = exc.code if isinstance(exc.code, int) else 1
+    except Exception as exc:
+        logger.exception("Falha ao coletar @%s", handle)
+        failed = CollectOneResult(
+            status="error",
+            collection_id=f"{handle}@{utc_stamp()}",
+            posts_in_period=0,
+            media_items=0,
+            foreign_posts_discarded=0,
+            error=str(exc),
+        )
+        atomic_write_bytes(
+            result_file,
+            json.dumps(failed.to_dict(), ensure_ascii=False).encode("utf-8"),
+        )
+        exit_code = 1
+    finally:
+        _log_max_rss()
+    raise typer.Exit(code=exit_code)
 
-    typer.echo(f"Raspando {len(accounts)} perfis do Instagram...")
-    asyncio.run(run_scrape(cfg, accounts))
-    typer.echo("Concluído.")
+
+async def _run_collect_one(cfg, paths: DataPaths, handle: str, run_id: str, scraper_factory=None):
+    loop = asyncio.get_running_loop()
+    task = asyncio.current_task()
+
+    def _on_sigterm() -> None:
+        task.cancel()
+
+    loop.add_signal_handler(signal.SIGTERM, _on_sigterm)
+    try:
+        return await collect_one(cfg, paths, handle, run_id, scraper_factory=scraper_factory)
+    except asyncio.CancelledError:
+        logger.info("coleta de @%s interrompida por SIGTERM", handle)
+        raise SystemExit(1) from None
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
 
 
-@app.command()
-def backfill(
-    config: Path = typer.Option(Path("config.yaml"), "--config", help="Caminho do config.yaml"),
-    extra_posts: int = typer.Option(
-        ..., "--extra-posts", help="Quantos posts a mais buscar, além do que já foi salvo, por conta."
-    ),
-) -> None:
-    """Aprofunda o histórico de contas já raspadas antes, buscando posts mais antigos
-    que ainda não foram salvos — ao contrário de `scrape`, NÃO para no post mais
-    recente já conhecido. Para uma conta com N posts já salvos, busca até N + EXTRA_POSTS
-    no total (os N já salvos são deduplicados, então só os realmente novos são baixados).
-    Contas ainda não raspadas usam o `max_posts` normal do config.yaml."""
-    if extra_posts <= 0:
-        raise typer.BadParameter("--extra-posts precisa ser um número positivo.")
-
-    cfg, accounts = _load_config_and_accounts(config)
-    if not accounts:
-        typer.echo("Nenhuma conta de Instagram encontrada no input. Nada a fazer.")
-        raise typer.Exit(code=0)
-
-    typer.echo(f"Aprofundando histórico de {len(accounts)} perfis do Instagram (+{extra_posts} posts cada)...")
-    asyncio.run(run_scrape(cfg, accounts, extra_posts=extra_posts))
-    typer.echo("Concluído.")
-
-
-@app.command("media-sync")
-def media_sync(
-    config: Path = typer.Option(Path("config.yaml"), "--config", help="Caminho do config.yaml"),
-) -> None:
-    """Baixa a mídia que falta em disco para posts já raspados (recupera downloads
-    interrompidos). Não abre navegador e não raspa nada novo."""
-    cfg, accounts = _load_config_and_accounts(config)
-    result = asyncio.run(run_media_sync(cfg, accounts))
-    for handle, n in result.items():
-        typer.echo(f"@{handle}: {n} arquivos reenfileirados")
-    typer.echo("Concluído.")
+def _log_max_rss() -> None:
+    # No Linux, ru_maxrss vem em kilobytes.
+    rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    logger.info("rss máximo: %.1f MB", rss_mb)
 
 
 if __name__ == "__main__":

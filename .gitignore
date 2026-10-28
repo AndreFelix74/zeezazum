@@ -15,3 +15,4 @@ logs/
 # dados de input/teste do usuário nunca vão pro repo (podem conter PII, ex. CPF)
 data/*
 !data/.gitkeep
+*.diff
